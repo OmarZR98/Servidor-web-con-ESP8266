@@ -1,0 +1,213 @@
+#include <ESP8266WiFi.h>
+#include <WiFiClient.h>
+///////////////////////////////////////
+#include <ESP8266WebServer.h>
+#include <ESP8266mDNS.h>
+#include "ESP8266WiFi.h"
+
+#ifndef STASSID
+#define STASSID "martinoly"
+#define STAPSK  "1234567890"
+#endif
+
+const char *ssid = STASSID;
+const char *password = STAPSK;
+
+
+long dis;
+long tiem;
+int relay = 13;
+int echo = 4;
+int tri = 16;
+bool clienteWeb = false;
+int t = 0;
+int estado = LOW;
+WiFiServer server(80);
+unsigned long previousMillis = 0;
+
+char host[48];
+String strhost = "192.168.43.101";
+String strurl = "/gez/enviardatos.php";
+
+
+// -----METODO PARA ENVIAR DATOS A LA BD----
+String enviardatos(String datos) {
+  String linea = "error";
+  WiFiClient client;
+  strhost.toCharArray(host, 49);
+
+  if (!client.connect(host, 80)) {
+    Serial.println("Fallo de conexion");
+    return linea;
+  }
+
+  client.print(String("POST ") + strurl + " HTTP/1.1" + "\r\n" +
+               "HOST: " + strhost + "\r\n" +
+               "Accept: */*" + "*\r\n" +
+               "Content-Length: " + datos.length() + "\r\n" +
+               "Content-Type: application/x-www-form-urlencoded" + "\r\n" +
+               "\r\n" + datos);
+
+
+  delay(10);
+
+  Serial.println("Enviando datos a SQL");
+
+  unsigned long timeout = millis();
+  while (client.available() == 0) {
+    if (millis() - timeout > 500) {
+      Serial.println("Cliente fuera de servicio");
+      client.stop();
+      return linea;
+
+    }
+
+  }
+
+  //Lee todas las lineas que recive el servidor
+  //y las imprime en el monitor serial
+  while (client.available()) {
+    linea = client.readStringUntil('\r');
+
+  }
+
+  Serial.println(linea);
+  return linea;
+}
+
+///////////////////////////////////////////
+
+void setup() {
+
+  Serial.begin(9600);
+
+  pinMode(tri, OUTPUT); //salida del pulso generado por el sensor ultrasónico
+  pinMode(echo, INPUT);//entrada del pulso generado por el sensor ultrasónico
+  pinMode(relay, OUTPUT);//alarma de la distancia(encenderá el led)
+
+
+
+  // Set WiFi to station mode and disconnect from an AP if it was previously connected
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
+  Serial.println("Setup done");
+  ////////////////////////////////////////////////////////
+
+  WiFi.begin(ssid, password);
+  Serial.println("");
+  // Wait for connection
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.print("Connected to ");
+  Serial.println(ssid);
+  server.begin();
+  Serial.println("Servidor inicializado");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+  Serial.printf("\n\nUtiliza esta URL para conectar: http://%s/\n", WiFi.localIP().toString().c_str());
+
+  //dht.begin();
+  ////////////////////////////////////////////////////////
+
+}
+
+void loop() {
+  digitalWrite(tri, LOW); //recibimiento del pulso.
+  delayMicroseconds(5);
+  digitalWrite(tri, HIGH);//envió del pulso.
+  delayMicroseconds(10);
+  tiem = pulseIn(echo, HIGH); //fórmula para medir el pulso entrante.
+  dis = long(0.017 * tiem); //fórmula para calcular la distancia del sensor ultrasónico.
+
+  t++;
+  if (t > 100000) {
+    t = 0;
+
+    //int y =dht.readTemperature();//valor del sensor, en este caso genero un valor aleatorio, pero este valor se tiene que sistituir con una lectura analogica
+    //Serial.println(y);
+    enviardatos("temperatura=" + String(dis, 2)); //Convierto mi valor del sensor en string, con el metodo String, donde recive el valor y el numero de digitos despues del punto
+  } else {
+
+    if (!clienteWeb) {
+
+      if (dis > 25) { //comparativo para la alarma se ingresa la distancia en la que encenderá o apagara.
+        digitalWrite(relay, LOW);
+        Serial.println("Relay accionado");
+
+      }
+      else
+      {
+        digitalWrite(relay, HIGH);
+        Serial.println("Relay no accionado");
+      }
+      Serial.println("LA DISTANCIA MEDIDA ES:");
+      Serial.println(dis);
+      Serial.println("cm");
+      delay(500);
+    } else {
+
+      if (dis < 25) { //comparativo para la alarma se ingresa la distancia en la que encenderá o apagara.
+        clienteWeb = false;
+        digitalWrite(relay, HIGH);
+      }
+
+    }
+
+
+    WiFiClient client = server.available();
+    if (!client)
+    {
+      return;
+    }
+
+    Serial.println("nuevo cliente");
+    while (!client.available()) {
+      delay(1);
+    }
+    clienteWeb = true;
+    String peticion = client.readStringUntil('\r');
+    Serial.println(peticion);
+    client.flush();
+
+    if (peticion.indexOf('/LED=ON') != -1)
+    {
+      estado = LOW;
+    }
+    if (peticion.indexOf('/LED=OFF') != -1)
+    {
+      estado = HIGH;
+    }
+
+    digitalWrite(relay, estado);
+
+
+    client.println("HTTP/1.1 200 OK");
+    client.println("");
+    client.println("");
+    client.println("");
+    client.println("");
+
+    client.println("<h1 align=center>");
+    if (estado == HIGH)
+    {
+      client.println("<button onClick=location.href='./?LED=OFF' style='width:400px; height:200px; background-color:#d82408; color:snow; padding:10px; border:1px solid #3F7CFF;'>OFF</button>");
+
+    }
+    else if (estado == LOW)
+    {
+      client.println("<button onClick=location.href='./?LED=ON' style='width:400px; height:200px; background-color:#aaf442; color:snow; padding:10px; border:1px solid #3F7CFF;'>ON</button>");
+
+
+    }
+
+    client.println("</html>");
+    delay(1);
+
+    Serial.println("Peticion finalizada");
+    Serial.println("");
+  }
+}
